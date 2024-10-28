@@ -7,7 +7,7 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 
 def get_current_user_from_cookie(request: Request) -> Optional[dict]:
     token = request.cookies.get("token")  # Get the token from cookies
-    
+    print(request)
     if not token:
         print("No token found in cookies")
         return None
