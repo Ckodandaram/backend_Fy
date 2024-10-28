@@ -1,0 +1,48 @@
+# Python files and cache
+*.py[cod]
+__pycache__/
+*.so
+*.pyd
+
+# Virtual environments
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment variables
+.env
+.env.*
+
+# Pytest and testing-related files
+.pytest_cache/
+.tox/
+.coverage
+coverage.xml
+htmlcov/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# VS Code and editor-specific files
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+# GitHub files (if specific to workflows or config)
+.github/
+
+# Logs and debug output
+*.log
+
+# FastAPI specific
+instance/
