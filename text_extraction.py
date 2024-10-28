@@ -38,7 +38,7 @@ upload_dir = "uploads"
 os.makedirs(upload_dir, exist_ok=True)
 
 # CORS setup to allow frontend from localhost:3000 to interact with backend
-app.add_middleware(
+@app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://frontend-fy.onrender.com"],  # Your frontend origin
     allow_credentials=True,  # Required to include cookies
