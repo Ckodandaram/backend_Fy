@@ -75,7 +75,6 @@ audit_logs_collection = database.get_collection("audit_logs")
 @app.post("/upload/")
 async def upload_file(request: Request, file: UploadFile = File(...), form_number: int = File(...)):
     # Print all cookies received in the request
-    print(request.cookies)  # This will log all cookies
     
     # Decode user from JWT token in the cookie
     user = get_current_user_from_cookie(request)
@@ -286,8 +285,12 @@ async def get_billing(request: Request):
 
 
 # Route to generate PDF
+
 @app.get("/billing/pdf/")
-async def generate_billing_pdf(request: Request):
+async def generate_billing_pdf(request: Request, type: str):
+    # Extract token from query parameters
+    token = request.query_params.get("token")
+    request.headers["Authorization"]="Bearer {token}"
     # Fetch billing data
     billing_data = await get_billing(request)
     user_data = get_current_user_from_cookie(request)  # Assumed you have a function to get user data
@@ -397,7 +400,10 @@ async def generate_billing_pdf(request: Request):
 
 # Route to generate CSV
 @app.get("/billing/csv/")
-async def generate_billing_csv(request: Request):
+async def generate_billing_csv(request: Request, type: str):
+    # Extract token from query parameters
+    token = request.query_params.get("token")
+    request.headers["Authorization"]="Bearer {token}"
     user = get_current_user_from_cookie(request)  # Assumed you have a function to get user data
     if not user:
         raise HTTPException(status_code=401, detail="Unauthorized: No valid user token found")
