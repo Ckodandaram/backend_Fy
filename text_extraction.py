@@ -16,7 +16,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from schemas import DocumentSchema, APICallSchema, UserStatisticSchema, AuditLogSchema
 from motor.motor_asyncio import AsyncIOMotorClient
-from components.getToken import get_current_user_from_cookie
+from components.getToken import get_current_user_from_cookie,get_current_user
 from components.logDocument import log_document_processing
 from components.logApi import log_api_call
 from components.userStatistics import update_user_statistics
@@ -284,16 +284,73 @@ async def get_billing(request: Request):
     }
 
 
+async def get_billing_(token:str):
+    user = get_current_user(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized: No valid user token found")
+
+    user_id = user["id"]
+    user_stats = await user_statistics_collection.find_one({"user_id": user_id})
+    if not user_stats:
+        raise HTTPException(status_code=404, detail="User statistics not found")
+
+    documents = await documents_collection.find({"user_id": user_id}).to_list(length=100)
+    api_calls = await api_calls_collection.find({"user_id": user_id}).to_list(length=100)
+
+    document_rate_per_kb = 0.02
+    api_rate = 0.05
+
+    total_document_cost = 0
+    document_summary = []
+    for doc in documents:
+        doc_size_in_kb = doc["size"] / 1024
+        doc_charge = doc_size_in_kb * document_rate_per_kb
+        document_summary.append({
+            "document_id": str(doc["_id"]),
+            "document_name": doc["document_name"],
+            "type": doc["type"],
+            "size": doc["size"],
+            "number_of_pages": doc.get("number_of_pages", None),
+            "processing_timestamp": doc["processing_timestamp"],
+            "charges": doc_charge
+        })
+        total_document_cost += doc_charge
+
+    total_api_cost = 0
+    api_call_summary = []
+    for api_call in api_calls:
+        api_call_charge = api_rate
+        api_call_summary.append({
+            "api_request_id": str(api_call["_id"]),
+            "timestamp": api_call["timestamp"],
+            "api_endpoint": api_call["api_endpoint"],
+            "status": api_call["status"],
+            "charges": api_call_charge
+        })
+        total_api_cost += api_call_charge
+
+    total_cost = total_document_cost + total_api_cost
+
+    return {
+        "total_documents_processed": user_stats["total_documents_processed"],
+        "total_api_calls": user_stats["total_api_calls"],
+        "billing_period_start": user_stats["billing_period_start"],
+        "billing_period_end": user_stats["billing_period_end"],
+        "total_charges": total_cost,
+        "documents": document_summary,
+        "api_calls": api_call_summary
+    }
+
+
 # Route to generate PDF
 
 @app.get("/billing/pdf/")
-async def generate_billing_pdf(request: Request, type: str):
+async def generate_billing_pdf(request: Request):
     # Extract token from query parameters
     token = request.query_params.get("token")
-    request.headers["Authorization"]="Bearer {token}"
     # Fetch billing data
-    billing_data = await get_billing(request)
-    user_data = get_current_user_from_cookie(request)  # Assumed you have a function to get user data
+    billing_data = await get_billing_(token)
+    user_data = get_current_user(token)  # Assumed you have a function to get user data
     pdf_file = "billing_invoice.pdf"
 
     # Create a PDF document with A4 page size
@@ -400,11 +457,10 @@ async def generate_billing_pdf(request: Request, type: str):
 
 # Route to generate CSV
 @app.get("/billing/csv/")
-async def generate_billing_csv(request: Request, type: str):
+async def generate_billing_csv(request: Request):
     # Extract token from query parameters
     token = request.query_params.get("token")
-    request.headers["Authorization"]="Bearer {token}"
-    user = get_current_user_from_cookie(request)  # Assumed you have a function to get user data
+    user = get_current_user(token)  # Assumed you have a function to get user data
     if not user:
         raise HTTPException(status_code=401, detail="Unauthorized: No valid user token found")
 
