@@ -88,13 +88,13 @@ class PyObjectId(ObjectId):
         yield cls.validate
 
     @classmethod
-    def validate(cls, v):
+    def validate(cls, v, field):
         if not ObjectId.is_valid(v):
             raise ValueError('Invalid objectid')
         return ObjectId(v)
 
     @classmethod
-    def __get_pydantic_json_schema__(cls, schema):
+    def __get_pydantic_json_schema__(cls, schema, field):
         schema.update(type='string')
         return schema
 
@@ -103,11 +103,11 @@ class DocumentSchema(BaseModel):
     user_id: str
     document_name: str
     processing_timestamp: datetime
-    processing_duration: Optional[float] = None
     status: str
     size: int
     type: str
-    number_of_pages: Optional[int] = None
+    number_of_pages: int
+    processing_duration: float
 
     class Config:
         populate_by_name = True

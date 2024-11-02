@@ -1,6 +1,7 @@
 import os
 import shutil
 import json
+import PyPDF2
 import model as Model
 from datetime import datetime
 from fastapi import FastAPI, APIRouter, File, UploadFile, Request, HTTPException
@@ -20,8 +21,6 @@ os.makedirs(upload_dir, exist_ok=True)
 # Endpoint to upload a file and process it
 @app.post("/upload/")
 async def upload_file(request: Request, file: UploadFile = File(...), form_number: int = File(...)):
-    # Print all cookies received in the request
-    print(request.cookies)  # This will log all cookies
     
     # Decode user from JWT token in the cookie
     user = get_current_user_from_cookie(request)
@@ -41,6 +40,8 @@ async def upload_file(request: Request, file: UploadFile = File(...), form_numbe
         file.file.seek(0, os.SEEK_END)
         file_size = file.file.tell()
         file.file.seek(0, os.SEEK_SET)
+        reader = PyPDF2.PdfReader(file.file)
+        num_pages = len(reader.pages)
         
         file_path1 = file_path
 
@@ -64,10 +65,11 @@ async def upload_file(request: Request, file: UploadFile = File(...), form_numbe
         )
 
         # Log the API call
-        await log_api_call(user["id"], None, "/upload/", "success")
+        await log_api_call(user["id"], document_id, "/upload/", "success")
 
         # Log the audit event
-        await log_audit_event(user["id"], "document_processed_/upload/", f"Processed document {file.filename}")
+        await log_audit_event(user["id"], "document_processed", f"{file.filename}")
+        await log_audit_event(user["id"], "API_call_made", "/upload/")
         
         # Update user statistics
         await update_user_statistics(user["id"], documents_processed=1, api_calls=1)
@@ -95,3 +97,5 @@ async def upload_file(request: Request, file: UploadFile = File(...), form_numbe
         await log_api_call(user["id"], None, "/upload/", "error")
         await log_audit_event(user["id"], "document_processing_failed", f"Failed to process document {file.filename}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+    
+    

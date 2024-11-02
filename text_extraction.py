@@ -11,21 +11,20 @@ import jwt  # JWT for decoding token
 import csv
 import PyPDF2
 from reportlab.pdfgen import canvas
-from fastapi.responses import FileResponse
 from typing import Optional
 from dotenv import load_dotenv
 from schemas import DocumentSchema, APICallSchema, UserStatisticSchema, AuditLogSchema
 from motor.motor_asyncio import AsyncIOMotorClient
-from components.getToken import get_current_user_from_cookie,get_current_user
-from components.logDocument import log_document_processing
+from components.getToken import get_current_user_from_cookie, get_current_user
+from components.logDocument import log_document_processing, update_document_processing
 from components.logApi import log_api_call
 from components.userStatistics import update_user_statistics
 from components.logAudit import log_audit_event
 from components.upload import upload_file
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Image
-from reportlab.lib.styles import getSampleStyleSheet 
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Image, Spacer
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 
 
@@ -73,7 +72,86 @@ audit_logs_collection = database.get_collection("audit_logs")
 
 # Endpoint to upload a file and process it
 @app.post("/upload/")
-async def upload_file(request: Request, file: UploadFile = File(...), form_number: int = File(...)):
+async def upload_file(request: Request, file: UploadFile = File(...), form_number: int = File(...), doc_id: Optional[str]= File(...)):
+    # Print all cookies received in the request
+    
+    # Decode user from JWT token in the cookie
+    user = get_current_user_from_cookie(request)
+    
+    if not user:
+        raise HTTPException(status_code=401, detail="Unauthorized: No valid user token found")
+
+    try:
+        file_path = os.path.join(upload_dir, file.filename)
+        print(f"User details: {user}")
+
+        # Save the file
+        with open(file_path, "wb") as image:
+            shutil.copyfileobj(file.file, image)
+        
+        file_path1 = file_path
+
+        # Call the model to process the file
+        start_time = datetime.utcnow()
+        output = Model.myModel(file_path1, form_number)
+        end_time = datetime.utcnow()
+
+        # Calculate processing duration
+        processing_duration = round((end_time - start_time).total_seconds(), 1)
+
+        # Update document processing with the duration
+        await update_document_processing(
+            user_id=user["id"],
+            doc_id=doc_id,
+            status="processed",
+            processing_duration=processing_duration
+        )
+
+        # Log the API call
+        await log_api_call(user["id"], doc_id, "/upload/", "success")
+
+        # Log the audit event
+        await log_audit_event(user["id"], "document_processed", f"{file.filename}")
+        await log_audit_event(user["id"], "API_call_made", "/upload/")
+        
+        # Update user statistics
+        await update_user_statistics(user["id"], documents_processed=1, api_calls=1)
+
+        # Write output to JSON file
+        with open('output.json', 'w') as f:
+            json.dump(output, f)
+
+        # Stream JSON file as response
+        def iterfile():
+            with open('output.json', 'rb') as f:
+                yield from f
+
+        # Send JSON file as response
+        response = StreamingResponse(iterfile(), media_type='application/json',
+                                     headers={'Content-Disposition': 'attachment;filename=output.json'})
+
+        # Cleanup file
+        os.remove(file_path1)
+        
+        # response["document_id"]=document_id
+
+        return response
+
+    except Exception as e:
+        print(f"Error during file upload: {e}")
+        await update_document_processing(
+            user_id=user["id"],
+            doc_id=doc_id,
+            status="failed",
+            processing_duration=0
+        )
+        await log_api_call(user["id"], doc_id, "/upload/", "error")
+        # await log_audit_event(user["id"], "document_processing_failed", f"Failed to process document {file.filename}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@app.post("/insert_document/")
+async def insert_doc(request: Request, file: UploadFile = File(...), form_number: int = File(...)):
     # Print all cookies received in the request
     
     # Decode user from JWT token in the cookie
@@ -98,16 +176,7 @@ async def upload_file(request: Request, file: UploadFile = File(...), form_numbe
         # Get the number of pages in the PDF
         reader = PyPDF2.PdfReader(file.file)
         num_pages = len(reader.pages)
-        
-        file_path1 = file_path
-
-        # Call the model to process the file
-        start_time = datetime.utcnow()
-        output = Model.myModel(file_path1, form_number)
-        end_time = datetime.utcnow()
-
-        # Calculate processing duration
-        processing_duration = (end_time - start_time).total_seconds()
+    
 
         # Log document processing with the duration
         document_id = await log_document_processing(
@@ -117,65 +186,39 @@ async def upload_file(request: Request, file: UploadFile = File(...), form_numbe
             size=file_size, 
             doc_type=file.content_type,
             pages=num_pages,  # Example number of pages
-            processing_duration=processing_duration  # Pass the duration here
+            processing_duration=0  # Pass the duration here
         )
 
-        # Log the API call
-        await log_api_call(user["id"], None, "/upload/", "success")
-
-        # Log the audit event
-        await log_audit_event(user["id"], "document_processed", f"{file.filename}")
-        await log_audit_event(user["id"], "API_call_made", "/upload/")
-        
-        # Update user statistics
-        await update_user_statistics(user["id"], documents_processed=1, api_calls=1)
-
-        # Write output to JSON file
-        with open('output.json', 'w') as f:
-            json.dump(output, f)
-
-        # Stream JSON file as response
-        def iterfile():
-            with open('output.json', 'rb') as f:
-                yield from f
-
-        # Send JSON file as response
-        response = StreamingResponse(iterfile(), media_type='application/json',
-                                     headers={'Content-Disposition': 'attachment;filename=output.json'})
-
-        # Cleanup file
-        os.remove(file_path1)
-
-        return response
+        return document_id
 
     except Exception as e:
-        print(f"Error during file upload: {e}")
-        await log_api_call(user["id"], None, "/upload/", "error")
-        await log_audit_event(user["id"], "document_processing_failed", f"Failed to process document {file.filename}")
+        print(f"Error during file inserting in db: {e}")
+        document_id = await log_document_processing(
+            user_id=user["id"], 
+            document_name=file.filename, 
+            status="failed", 
+            size=file_size, 
+            doc_type=file.content_type,
+            pages=num_pages,  # Example number of pages
+            processing_duration=0  # Pass the duration here
+        )
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
 
 # Endpoint to extract signature from a document
 @app.post("/get_signature/")
-async def get_signature(request: Request, file: UploadFile = File(...), form_number: int = File(...)):
+async def get_signature(request: Request, file: UploadFile = File(...), form_number: int = File(...), doc_id: str= File(...)):
     user = get_current_user_from_cookie(request)
 
     if not user:
         raise HTTPException(status_code=401, detail="Unauthorized: No valid user token found")
 
     try:
+        print(f"User details: {user}")
         # Save the file
         file_path = os.path.join(upload_dir, file.filename)
         with open(file_path, "wb") as image:
             shutil.copyfileobj(file.file, image)
-
-        # Get the file size in bytes
-        file.file.seek(0, os.SEEK_END)
-        file_size = file.file.tell()
-        file.file.seek(0, os.SEEK_SET)
-        
-        # Get the number of pages in the PDF
-        reader = PyPDF2.PdfReader(file.file)
-        num_pages = len(reader.pages)
         
         start_time = time.time()
         # Analyze the document for signature
@@ -184,24 +227,19 @@ async def get_signature(request: Request, file: UploadFile = File(...), form_num
 
         # Modify the PDF with the extracted signature
         modified_pdf_path = Model.modify_pdf_with_signature(file_path, coordinates)
-
         # Return the modified PDF
         response = FileResponse(modified_pdf_path, filename="output.pdf", media_type="application/pdf")
 
-        # Log document processing
-        processing_duration = end_time - start_time
-        await log_document_processing(
-            user_id=user["id"], 
-            document_name=file.filename, 
-            status="processed", 
-            size=file_size, 
-            doc_type="pdf",
-            pages=num_pages,  # Example number of pages
-            processing_duration=processing_duration  # Pass the duration here
+        # Update document processing
+        processing_duration = round((end_time - start_time), 1)
+        await update_document_processing(
+            user_id=user["id"],
+            doc_id=doc_id,
+            status="processed",
+            processing_duration=processing_duration
         )
-
         # Log the API call
-        await log_api_call(user["id"], None, "/get_signature/", "success")
+        await log_api_call(user["id"], doc_id, "/get_signature/", "success")
         
         
         # Log the audit event
@@ -220,8 +258,14 @@ async def get_signature(request: Request, file: UploadFile = File(...), form_num
 
     except Exception as e:
         print(f"Error during signature extraction: {e}")
-        await log_api_call(user["id"], None, "/get_signature/", "error")
-        await log_audit_event(user["id"], "document_processing_failed", f"Failed to process document {file.filename}")
+        await update_document_processing(
+            user_id=user["id"],
+            doc_id=doc_id,
+            status="partially_processed",
+            processing_duration=0
+        )
+        await log_api_call(user["id"], doc_id, "/get_signature/", "error")
+        # await log_audit_event(user["id"], "document_processing_failed", f"Failed to process document {file.filename}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @app.get("/billing/")
@@ -247,6 +291,8 @@ async def get_billing(request: Request):
     for doc in documents:
         doc_size_in_kb = doc["size"] / 1024
         doc_charge = doc_size_in_kb * document_rate_per_kb
+        document_api_calls = await api_calls_collection.find({"document_id": doc["_id"]}).to_list(length=100)
+
         document_summary.append({
             "document_id": str(doc["_id"]),
             "document_name": doc["document_name"],
@@ -254,7 +300,15 @@ async def get_billing(request: Request):
             "size": doc["size"],
             "number_of_pages": doc.get("number_of_pages", None),
             "processing_timestamp": doc["processing_timestamp"],
-            "charges": doc_charge
+            "processing_duration": doc.get("processing_duration", None),
+            "status": doc["status"],
+            "charges": doc_charge,
+            "api_calls": [{
+                "api_request_id": str(api["_id"]),
+                "timestamp": api["timestamp"],
+                "api_endpoint": api["api_endpoint"],
+                "status": api["status"]
+            } for api in document_api_calls]
         })
         total_document_cost += doc_charge
 
@@ -343,115 +397,112 @@ async def get_billing_(token:str):
 
 
 # Route to generate PDF
-
 @app.get("/billing/pdf/")
 async def generate_billing_pdf(request: Request):
-    # Extract token from query parameters
     token = request.query_params.get("token")
-    # Fetch billing data
     billing_data = await get_billing_(token)
-    user_data = get_current_user(token)  # Assumed you have a function to get user data
+    user_data = get_current_user(token)
     pdf_file = "billing_invoice.pdf"
-
-    # Create a PDF document with A4 page size
-    pdf = SimpleDocTemplate(pdf_file, pagesize=A4)
+    
+    pdf = SimpleDocTemplate(pdf_file, pagesize=A4, rightMargin=20, leftMargin=20, topMargin=40, bottomMargin=40)
     styles = getSampleStyleSheet()
     elements = []
 
-    # Add company logo (ensure .svg path is correct)
+    # Add company logo
     logo_path = "aeroqube-logo.webp"
-    logo = Image(logo_path, 6 * inch, 1.5 * inch)
+    logo = Image(logo_path, 4 * inch, 1.2 * inch)
     logo.hAlign = 'CENTER'
     elements.append(logo)
 
-    # Add a formal title for the billing statement
-    title = Paragraph(f"<b><font size=18 color='#2E86C1'>Monthly Billing Statement</font></b>", styles['Title'])
+    # Title with enhanced styling
+    title_style = ParagraphStyle('TitleStyle', fontSize=16, textColor=colors.HexColor('#2E86C1'), alignment=1, spaceAfter=12)
+    title = Paragraph("Monthly Billing Statement", title_style)
     elements.append(title)
 
-    # User Information Section
-    user_info = f"""
-    <br/><br/>
-    <b>User: {user_data['email']}</b><br/>
-    Billing Date: <b>{datetime.now().strftime("%Y-%m-%d")}</b><br/>
-    Billing Period: <b>{billing_data['billing_period_start']} - {billing_data['billing_period_end']}</b><br/>
-    Total Documents Processed: <b>{billing_data['total_documents_processed']}</b><br/>
-    Total API Calls: <b>{billing_data['total_api_calls']}</b><br/>
-    Total Charges: <b>Rs. {billing_data['total_charges']:.2f}</b><br/><br/>
-    """
-    elements.append(Paragraph(user_info, styles['Normal']))
+    # User Information Section in two-column format
+    user_info_table_data = [
+        ["User:", user_data['email']],
+        ["Billing Date:", datetime.now().strftime("%Y-%m-%d")],
+        ["Billing Period:", f"{billing_data['billing_period_start']} - {billing_data['billing_period_end']}"],
+        ["Total Documents Processed:", billing_data['total_documents_processed']],
+        ["Total API Calls:", billing_data['total_api_calls']],
+        ["Total Charges:", f"Rs. {billing_data['total_charges']:.2f}"],
+    ]
+
+    # Style the User Info Table
+    user_info_table = Table(user_info_table_data, colWidths=[2.5 * inch, 3.5 * inch])
+    user_info_table.setStyle(TableStyle([
+        ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+        ('ALIGN', (1, 0), (1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#2E86C1')),
+        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+    ]))
+    elements.append(user_info_table)
+    elements.append(Spacer(1, 12))
 
     # Document Summary Table
     elements.append(Paragraph("<b>Document Summary:</b>", styles['Heading2']))
-
     doc_table_data = [["Document Name", "Size (KB)", "Pages", "Date Processed", "Charges (Rs.)"]]
-
     for i, doc in enumerate(billing_data['documents']):
-        row_background = colors.whitesmoke if i % 2 == 0 else colors.lightgrey  # Alternate row colors
-        doc_table_data.append([doc['document_name'], f"{doc['size'] / 1024:.2f}", doc['number_of_pages'], doc['processing_timestamp'], f"Rs. {doc['charges']:.2f}"])
+        doc_table_data.append([
+            doc['document_name'], f"{doc['size'] / 1024:.2f}", 
+            doc['number_of_pages'], doc['processing_timestamp'], 
+            f"Rs. {doc['charges']:.2f}"
+        ])
 
-    doc_table = Table(doc_table_data)
+    doc_table = Table(doc_table_data, colWidths=[2*inch, 1*inch, 1*inch, 2*inch, 1.5*inch])
     doc_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2E86C1')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 12),
-        ('BACKGROUND', (0, 1), (-1, -1), colors.whitesmoke),  # Remove this line
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+        ('FONTSIZE', (0, 0), (-1, 0), 11),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.lightgrey),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.lightgrey]),
         ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
         ('TOPPADDING', (0, 0), (-1, 0), 8),
     ]))
-
-    # Apply alternating background colors for rows after the header
-    for i in range(1, len(doc_table_data)):
-        bg_color = colors.whitesmoke if i % 2 == 0 else colors.lightgrey
-        doc_table.setStyle(TableStyle([('BACKGROUND', (0, i), (-1, i), bg_color)]))
-
     elements.append(doc_table)
-
 
     # API Call Summary Table
     elements.append(Paragraph("<b>API Call Summary:</b>", styles['Heading2']))
     api_table_data = [["API Endpoint", "Date", "Charges (Rs.)"]]
 
     for i, api in enumerate(billing_data['api_calls']):
-        row_background = colors.whitesmoke if i % 2 == 0 else colors.lightgrey  # Alternate row colors
-        api_table_data.append([api['api_endpoint'], api['timestamp'], f"Rs. {api['charges']}"])
+        api_table_data.append([
+            api['api_endpoint'], api['timestamp'], 
+            f"Rs. {api['charges']:.2f}"
+        ])
 
-    api_table = Table(api_table_data)
+    api_table = Table(api_table_data, colWidths=[3*inch, 2*inch, 1.5*inch])
     api_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2E86C1')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 12),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.black),
+        ('FONTSIZE', (0, 0), (-1, 0), 11),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.whitesmoke, colors.lightgrey]),
         ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
         ('TOPPADDING', (0, 0), (-1, 0), 8),
     ]))
-
-    # Apply alternating background colors for rows after the header
-    for i in range(1, len(api_table_data)):
-        bg_color = colors.whitesmoke if i % 2 == 0 else colors.lightgrey
-        api_table.setStyle(TableStyle([('BACKGROUND', (0, i), (-1, i), bg_color)]))
-
     elements.append(api_table)
-
 
     # Billing Summary Section
     elements.append(Paragraph("<b>Billing Summary:</b>", styles['Heading2']))
     summary = f"""
-    <br/>
     <b>Total Documents Processed:</b> {billing_data['total_documents_processed']}<br/>
     <b>Total API Calls:</b> {billing_data['total_api_calls']}<br/>
-    <b>Total Charges:</b> Rs. {(billing_data['total_charges']):.2f}<br/><br/>
+    <b>Total Charges:</b> Rs. {billing_data['total_charges']:.2f}<br/>
     """
     elements.append(Paragraph(summary, styles['Normal']))
 
-    # Build the PDF document
+    # Build and return the PDF
     pdf.build(elements)
-
-    # Return the PDF file as a response
     return FileResponse(pdf_file, media_type="application/pdf", filename="billing_invoice.pdf")
 
 

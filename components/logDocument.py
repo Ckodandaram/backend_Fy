@@ -1,5 +1,6 @@
 from datetime import datetime
 from schemas import DocumentSchema
+from bson import ObjectId
 import os
 from motor.motor_asyncio import AsyncIOMotorClient
 
@@ -23,3 +24,14 @@ async def log_document_processing(user_id: str, document_name: str, status: str,
     )
     result = await documents_collection.insert_one(document.dict(by_alias=True))
     return str(result.inserted_id)  # Return the document_id
+
+
+async def update_document_processing(user_id: str, doc_id: str, status: str, processing_duration: float):
+    doc = await documents_collection.find_one({"_id": ObjectId(doc_id), "user_id": user_id})
+    if not doc:
+        raise ValueError("Document not found")
+    new_processing_duration = doc["processing_duration"] + processing_duration
+    await documents_collection.update_one(
+        {"_id": ObjectId(doc_id), "user_id": user_id},
+        {"$set": {"status": status, "processing_duration": new_processing_duration}}
+    )
