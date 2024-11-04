@@ -2,6 +2,7 @@ from datetime import datetime
 from schemas import DocumentSchema
 from bson import ObjectId
 import os
+from typing import Optional
 from motor.motor_asyncio import AsyncIOMotorClient
 
 
@@ -11,7 +12,7 @@ database = client["audit_logs_db"]
 documents_collection = database.get_collection("documents")
 
 # Function to log document processing in the database
-async def log_document_processing(user_id: str, document_name: str, status: str, size: int, doc_type: str, pages: int, processing_duration: float) -> str:
+async def log_document_processing(user_id: str, document_name: str, size: int, doc_type: str, pages: int, processing_duration: float, status: Optional[str] = None) -> str:
     document = DocumentSchema(
         user_id=user_id,
         document_name=document_name,
@@ -31,6 +32,10 @@ async def update_document_processing(user_id: str, doc_id: str, status: str, pro
     if not doc:
         raise ValueError("Document not found")
     new_processing_duration = doc["processing_duration"] + processing_duration
+    # Check if the current status is 'processed' and the given status is 'error'
+    # or if the current status is 'error' and the given status is 'processed'
+    if (doc["status"] == "processed" and status == "error") or (doc["status"] == "error" and status == "processed"):
+        status = "partially_processed"
     await documents_collection.update_one(
         {"_id": ObjectId(doc_id), "user_id": user_id},
         {"$set": {"status": status, "processing_duration": new_processing_duration}}

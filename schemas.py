@@ -103,7 +103,7 @@ class DocumentSchema(BaseModel):
     user_id: str
     document_name: str
     processing_timestamp: datetime
-    status: str
+    status: Optional[str] = None
     size: int
     type: str
     number_of_pages: int

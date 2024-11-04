@@ -20,7 +20,6 @@ from components.logDocument import log_document_processing, update_document_proc
 from components.logApi import log_api_call
 from components.userStatistics import update_user_statistics
 from components.logAudit import log_audit_event
-from components.upload import upload_file
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Image, Spacer
@@ -36,10 +35,13 @@ app = FastAPI()
 upload_dir = "uploads"
 os.makedirs(upload_dir, exist_ok=True)
 
+# Get the frontend URL from the .env file
+FRONTEND_URL = os.getenv("FRONTEND_URL")
+
 # CORS setup to allow frontend from localhost:3000 to interact with backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://frontend-fy.onrender.com","http://localhost:3000"],  # Your frontend origin
+    allow_origins=[FRONTEND_URL],  # Your frontend origin
     allow_credentials=True,  # Required to include cookies
     allow_methods=["*"],
     allow_headers=["*"],
@@ -70,9 +72,9 @@ api_calls_collection = database.get_collection("api_calls")
 user_statistics_collection = database.get_collection("user_statistics")
 audit_logs_collection = database.get_collection("audit_logs")
 
-# Endpoint to upload a file and process it
-@app.post("/upload/")
-async def upload_file(request: Request, file: UploadFile = File(...), form_number: int = File(...), doc_id: Optional[str]= File(...)):
+# Endpoint to extract and process a file
+@app.post("/extract/")
+async def extract_file(request: Request, file: UploadFile = File(...), form_number: int = File(...), doc_id: Optional[str]= File(...)):
     # Print all cookies received in the request
     
     # Decode user from JWT token in the cookie
@@ -108,11 +110,11 @@ async def upload_file(request: Request, file: UploadFile = File(...), form_numbe
         )
 
         # Log the API call
-        await log_api_call(user["id"], doc_id, "/upload/", "success")
+        await log_api_call(user["id"], doc_id, "/extract/", "success")
 
         # Log the audit event
         await log_audit_event(user["id"], "document_processed", f"{file.filename}")
-        await log_audit_event(user["id"], "API_call_made", "/upload/")
+        await log_audit_event(user["id"], "API_call_made", "/extract/")
         
         # Update user statistics
         await update_user_statistics(user["id"], documents_processed=1, api_calls=1)
@@ -138,20 +140,21 @@ async def upload_file(request: Request, file: UploadFile = File(...), form_numbe
         return response
 
     except Exception as e:
-        print(f"Error during file upload: {e}")
+        print(f"Error during file extract: {e}")
         await update_document_processing(
             user_id=user["id"],
             doc_id=doc_id,
             status="failed",
             processing_duration=0
         )
-        await log_api_call(user["id"], doc_id, "/upload/", "error")
+        await log_api_call(user["id"], doc_id, "/extract/", "error")
         # await log_audit_event(user["id"], "document_processing_failed", f"Failed to process document {file.filename}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@app.post("/insert_document/")
-async def insert_doc(request: Request, file: UploadFile = File(...), form_number: int = File(...)):
+# Endpoint to upload a file
+@app.post("/upload/")
+async def upload_file(request: Request, file: UploadFile = File(...)):
     # Print all cookies received in the request
     
     # Decode user from JWT token in the cookie
@@ -182,26 +185,36 @@ async def insert_doc(request: Request, file: UploadFile = File(...), form_number
         document_id = await log_document_processing(
             user_id=user["id"], 
             document_name=file.filename, 
-            status="processed", 
             size=file_size, 
             doc_type=file.content_type,
             pages=num_pages,  # Example number of pages
             processing_duration=0  # Pass the duration here
         )
+        
+        # Log the API call
+        await log_api_call(user["id"], document_id, "/upload/", "success")
+
+        # Log the audit event
+        await log_audit_event(user["id"], "document_uploaded", f"{file.filename}")
+        await log_audit_event(user["id"], "API_call_made", "/upload/")
+        
+        # Update user statistics
+        await update_user_statistics(user["id"], documents_processed=0, api_calls=1)
 
         return document_id
 
     except Exception as e:
-        print(f"Error during file inserting in db: {e}")
+        print(f"Error during file uploading in db: {e}")
         document_id = await log_document_processing(
             user_id=user["id"], 
             document_name=file.filename, 
-            status="failed", 
             size=file_size, 
             doc_type=file.content_type,
             pages=num_pages,  # Example number of pages
-            processing_duration=0  # Pass the duration here
+            processing_duration=0,  # Pass the duration here
+            status="failed"
         )
+        await log_api_call(user["id"], document_id, "/upload/", "error")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
@@ -224,14 +237,14 @@ async def get_signature(request: Request, file: UploadFile = File(...), form_num
         # Analyze the document for signature
         coordinates = Model.analyze_document(file_path, form_number)
         end_time = time.time()
+        # Update document processing
+        processing_duration = round((end_time - start_time), 1)
 
         # Modify the PDF with the extracted signature
         modified_pdf_path = Model.modify_pdf_with_signature(file_path, coordinates)
         # Return the modified PDF
         response = FileResponse(modified_pdf_path, filename="output.pdf", media_type="application/pdf")
 
-        # Update document processing
-        processing_duration = round((end_time - start_time), 1)
         await update_document_processing(
             user_id=user["id"],
             doc_id=doc_id,
@@ -247,7 +260,7 @@ async def get_signature(request: Request, file: UploadFile = File(...), form_num
 
         # Update user statistics
         # await update_user_statistics(user["id"], documents_processed=1, api_calls=1)
-        # as the no.of documents processed will not change as we are processing the same document in upload 
+        # as the no.of documents processed will not change as we are processing the same document in extract 
         # and get_signature(this is a optional call)
         await update_user_statistics(user["id"], documents_processed=0, api_calls=1)
 
@@ -261,7 +274,7 @@ async def get_signature(request: Request, file: UploadFile = File(...), form_num
         await update_document_processing(
             user_id=user["id"],
             doc_id=doc_id,
-            status="partially_processed",
+            status="failed",
             processing_duration=0
         )
         await log_api_call(user["id"], doc_id, "/get_signature/", "error")
@@ -517,7 +530,7 @@ async def generate_billing_csv(request: Request):
 
     billing_data = {
         "api_calls": [
-            {"api_endpoint": "/upload/", "timestamp": "2023-10-01T12:00:00Z", "status": "success", "charges": 10},
+            {"api_endpoint": "/extract/", "timestamp": "2023-10-01T12:00:00Z", "status": "success", "charges": 10},
             {"api_endpoint": "/get_signature/", "timestamp": "2023-10-02T12:00:00Z", "status": "success", "charges": 15},
         ]
     }
