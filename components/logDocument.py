@@ -34,7 +34,7 @@ async def update_document_processing(user_id: str, doc_id: str, status: str, pro
     new_processing_duration = doc["processing_duration"] + processing_duration
     # Check if the current status is 'processed' and the given status is 'error'
     # or if the current status is 'error' and the given status is 'processed'
-    if (doc["status"] == "processed" and status == "error") or (doc["status"] == "error" and status == "processed"):
+    if (doc["status"] == "processed" and status == "failed") or (doc["status"] == "failed" and status == "processed"):
         status = "partially_processed"
     await documents_collection.update_one(
         {"_id": ObjectId(doc_id), "user_id": user_id},
