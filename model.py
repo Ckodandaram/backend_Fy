@@ -6,6 +6,7 @@ from PyPDF2.generic import FloatObject
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from datetime import date, datetime
 import shutil
 from tempfile import NamedTemporaryFile
 import os
@@ -15,6 +16,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 logger = logging.getLogger()
+
+
+def convert_dates_in_dict(data):
+    """Recursively converts all date and datetime objects in a dictionary to ISO formatted strings."""
+    if isinstance(data, dict):
+        return {k: convert_dates_in_dict(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [convert_dates_in_dict(i) for i in data]
+    elif isinstance(data, (date, datetime)):
+        return data.isoformat()
+    return data
 
 
 def myModel(file_path,form_number): 
@@ -28,7 +40,10 @@ def myModel(file_path,form_number):
         model_id="Form2_Neural"
     elif form_number == 3:
         model_id="Form3_Neural"
-   
+    elif form_number == 4:
+        key = os.getenv("KEY2")
+        endpoint = os.getenv("ENDPOINT2")
+        model_id="voter_neural"
     FORM_NAME = file_path
 
     document_intelligence_client = DocumentAnalysisClient(
@@ -526,6 +541,90 @@ def myModel(file_path,form_number):
     
     }
    } 
+    elif form_number == 4:
+      storage={"Root": {
+        "1": {
+            "Name": [],
+            "Street": [],
+            "City": [],
+            "Phonenumber": [],
+            "Email": [],
+            "Date": []
+        },
+        "2": {
+            "Name": [],
+            "Street": [],
+            "City": [],
+            "Phonenumber": [],
+            "Email": [],
+            "Date": []
+        },
+        "3": {
+            "Name": [],
+            "Street": [],
+            "City": [],
+            "Phonenumber": [],
+            "Email": [],
+            "Date": []
+        },
+        "4": {
+            "Name": [],
+            "Street": [],
+            "City": [],
+            "Phonenumber": [],
+            "Email": [],
+            "Date": []
+        },
+        "5": {
+            "Name": [],
+            "Street": [],
+            "City": [],
+            "Phonenumber": [],
+            "Email": [],
+            "Date": []
+        },
+        "6": {
+            "Name": [],
+            "Street": [],
+            "City": [],
+            "Phonenumber": [],
+            "Email": [],
+            "Date": []
+        },
+        "7": {
+            "Name": [],
+            "Street": [],
+            "City": [],
+            "Phonenumber": [],
+            "Email": [],
+            "Date": []
+        },
+        "8": {
+            "Name": [],
+            "Street": [],
+            "City": [],
+            "Phonenumber": [],
+            "Email": [],
+            "Date": []
+        },
+        "9": {
+            "Name": [],
+            "Street": [],
+            "City": [],
+            "Phonenumber": [],
+            "Email": [],
+            "Date": []
+        },
+        "10": {
+            "Name": [],
+            "Street": [],
+            "City": [],
+            "Phonenumber": [],
+            "Email": [],
+            "Date": []
+        }
+     }
+    }
         
     for document in result.documents:
         for name, field in document.fields.items():
@@ -537,20 +636,22 @@ def myModel(file_path,form_number):
                 for p in points:
                     coordinates.append((p.x*72,p.y*72))
 
+    # After populating the `storage` dictionary, convert date fields
+    storage = convert_dates_in_dict(storage)  # Apply conversion to all date fields in the dictionary
 
-    nested_dict={}
-
+    # Now convert `storage` to JSON
+    nested_dict = {}
     for key, value in storage.items():
-        keys_list=key.split("|")
-        temp_dict=nested_dict
+        keys_list = key.split("|")
+        temp_dict = nested_dict
 
         for k in keys_list[:-1]:
-            temp_dict=temp_dict.setdefault(k,{})
+            temp_dict = temp_dict.setdefault(k, {})
 
-        temp_dict[keys_list[-1]]=value
+        temp_dict[keys_list[-1]] = value
+
     json_str = json.dumps(nested_dict, indent=4)
     return json_str
-  
 
 
 
@@ -566,6 +667,10 @@ def analyze_document(file_path,form_number):
         model_id="Form2_Template"
     elif form_number == 3:
         model_id="Form3_Templatee"
+    elif form_number == 4:
+        endpoint = os.getenv("ENDPOINT2")
+        key = os.getenv("KEY2")
+        model_id="voter_neural"
 
     document_intelligence_client = DocumentAnalysisClient(
         endpoint=endpoint, credential=AzureKeyCredential(key)
